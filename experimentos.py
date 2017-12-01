@@ -4,16 +4,21 @@ from sklearn.ensemble import RandomForestClassifier
 import numpy as np
 import statistics
 import matplotlib.pyplot as plt
+import sklearn
 from sklearn import datasets
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import classification_report
 from sklearn.svm import SVC
+from sklearn.svm import LinearSVC
+from sklearn.ensemble import BaggingClassifier
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import confusion_matrix
 import os
 from os import walk
+from os import path
 from random import randint
 
 # Divide um array em N partes iguais. Usado para o cross validation
@@ -32,6 +37,19 @@ def warn(*args, **kwargs):
     pass
 import warnings
 warnings.warn = warn
+
+# Dados dois arrays, de resultados e de precisoes, escolhe
+# o resultado com a maior precisão.
+def getHighestPrecisionResult(results, precisions):
+    if len(results) == 0 or len(precisions) == 0:
+        return []
+
+    highestPrecision = 0
+    for i in range(0, len(results)):
+        if precisions[i] > highestPrecision:
+            highestPrecision = i
+
+    return results[highestPrecision]
 
 # Retorna um classificador SVM linear treinado
 def linear_svm(X, y):
@@ -76,6 +94,9 @@ def grava_matriz_confusao(conf_arr, file):
     plt.yticks(range(height), alphabet[:height])
 
     # Grava resultados    
+    if not os.path.exists(os.path.dirname(file)):
+        os.makedirs(os.path.dirname(file))
+
     plt.savefig(file, format='png')
 
 
@@ -289,88 +310,238 @@ def realiza_classificacao_random_forest(fc2, y):
     file.write("%s\n" % std)
     file.close();
 
+def realiza_classificacao_5sub_lsvm_majorvote(fc2, y):
+    fc2NumFeatures = len(fc2[0])
+    fc2FeatureSlice = int(fc2NumFeatures / 5)
+
+    # Contém 5 cópias da fc2, porém cada uma com fc2FeatureSlice feature-vectors
+    slices = []
+
+    for i in range(0, 5):
+        vectors = []
+        for layer in fc2:
+            layerVectors = []
+            numFeatures = fc2FeatureSlice
+            if i == 4:
+                numFeatures += fc2NumFeatures % 5
+
+            for j in range(i * fc2FeatureSlice, i* fc2FeatureSlice + numFeatures):
+                layerVectors.append(layer[j])
+
+            # Deve ser igual a 820
+            # print(len(layerVectors))
+            vectors.append(layerVectors)
+
+        # Deve ser igual a 104
+        # print(len(vectors))
+        slices.append(vectors)
+            
+    # Roda uma vez pra cada subset.
+    lSvmResults = []
+    lSvmResultsPrecisions = []
+    for subsetIndex in range(0, len(slices)):
+        subset = slices[subsetIndex]
+        X_train, X_test, y_train, y_test = train_test_split(
+            subset, y, test_size=0.7, random_state=0)
+
+
+        svm = linear_svm(X_train, y_train)
+        result = svm.predict(X_test)
+
+        # Votação para cada subset
+        precision = 0
+        for vote in range(0, len(y_test)):
+            if result[vote] == y_test[vote]:
+                precision += 1
+
+        precision /= len(y)
+        lSvmResultsPrecisions.append(precision)
+        lSvmResults.append(result)
+        # print("LSVM Precision of subset #{}: {}".format(subsetIndex, precision))
+    
+        # Devemos gerar uma matriz de confusão para cada resultado?
+
+        # Formata matriz de confusão
+        # confMat = confusion_matrix(y_test, result)
+
+        # Grava resultados
+        # grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_lsvm_mvote_{}.png'.format(subsetIndex))
+
+
+    # Grava a matriz de confusãdo resultado mais preciso (majority voting)
+    highestResult = getHighestPrecisionResult(lSvmResults, lSvmResultsPrecisions)
+    confMat = confusion_matrix(y_test, highestResult)
+    grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_lsvm_mvote.png')
+
+    mean = statistics.mean(lSvmResultsPrecisions)
+    std = statistics.stdev(lSvmResultsPrecisions)
+
+    file = open("resultados/a/precision_5sub_lsvm_mvote.txt", 'w')
+    file.write("%s\n" % mean)
+    file.write("%s\n" % std)
+    file.close()
+
+    print("5-Subset Linear SVM MVote Precision: {}".format(mean))
+
+def realiza_classificacao_5sub_bagging(fc2, y):
+    fc2NumFeatures = len(fc2[0])
+    fc2FeatureSlice = int(fc2NumFeatures / 5)
+
+    # Contém 5 cópias da fc2, porém cada uma com fc2FeatureSlice feature-vectors
+    slices = []
+
+    for i in range(0, 5):
+        vectors = []
+        for layer in fc2:
+            layerVectors = []
+            numFeatures = fc2FeatureSlice
+            if i == 4:
+                numFeatures += fc2NumFeatures % 5
+
+            for j in range(i * fc2FeatureSlice, i* fc2FeatureSlice + numFeatures):
+                layerVectors.append(layer[j])
+
+            # Deve ser igual a 820
+            # print(len(layerVectors))
+            vectors.append(layerVectors)
+
+        # Deve ser igual a 104
+        # print(len(vectors))
+        slices.append(vectors)
+            
+    # Roda uma vez pra cada subset.
+    lSvmResults = []
+    for subsetIndex in range(0, len(slices)):
+        subset = slices[subsetIndex]
+        X_train, X_test, y_train, y_test = train_test_split(
+            subset, y, test_size=0.7, random_state=0)
+
+        classf = BaggingClassifier(KNeighborsClassifier(), 
+                max_samples=0.5, max_features=0.5)
+
+        classf.fit(X_train, y_train)
+        result = classf.predict(X_test)
+
+        # Votação para cada subset
+        precision = 0
+        for vote in range(0, len(y_test)):
+            if result[vote] == y_test[vote]:
+                precision += 1
+
+        precision /= len(y)
+        lSvmResults.append(precision)
+        print("Bagging Precision of subset #{}: {}".format(subsetIndex, precision))
+
+        # Formata matriz de confusão
+        confMat = confusion_matrix(y_test, result)
+
+        # Grava resultados
+        grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_bagging_{}.png'.format(subsetIndex))
+
+    mean = statistics.mean(lSvmResults)
+    std = statistics.stdev(lSvmResults)
+
+    file = open("resultados/a/precision_5sub_bagging.txt", 'w')
+    file.write("%s\n" % mean)
+    file.write("%s\n" % std)
+    file.close()
+
+    print("5-Subset Bagging Precision: {}".format(mean))
+    
+
 # Início do programa    
-conv1 = []
-conv5 = []
-fc2 = []
+if __name__ == '__main__':
+    conv1 = []
+    conv5 = []
+    fc2 = []
+    
+    # Diretório onde se encontram as amostras TODO deixar como parâmetro
+    directory = "features";
+    # Aqruivo com as classes
+    fileClasses = "classes.txt";
+    
+    y = []
+    
+    # Faz leitura do arquivo de classes
+    f = open(fileClasses)
+    classes = f.readlines()
+    
+    # Realiza leitura das amostras, só utilizando aquelas que pertencem a uma classe válida
+    print("Realizando leitura das amostras...")
+    numeroLeituras = 0;
+    amostras = os.listdir(directory)
+    for item in amostras:
+        print("Lendo amostra "+str((numeroLeituras+1))+". Total de "+str(len(amostras)))
+    
+        # Faz leitura da classe
+        linha = classes[int(item)-1]
+        classe = int(linha.split(' ')[1])    
+    
+        if (classe <= 5):
+            # Realiza leitura das features apenas se for de uma classe válida
+            y.append(classe)
+    
+            # Faz leitura das caraterísticas da camada conv1
+            arquivo = directory + "/" + item + "/conv1.txt";
+            with open(arquivo) as f:
+               content = f.readlines()
+               conv1.append([float(x.strip()) for x in content])
+    
+            # Faz leitura das caraterísticas da camada conv5
+            arquivo = directory + "/" + item + "/conv5.txt";
+            with open(arquivo) as f:
+               content = f.readlines()
+               conv5.append([float(x.strip()) for x in content])
+    
+            # Faz leitura das caraterísticas da camada fc2
+            arquivo = directory + "/" + item + "/conv7.txt";
+            with open(arquivo) as f:
+               content = f.readlines()
+               fc2.append([float(x.strip()) for x in content])
+    
+        numeroLeituras = numeroLeituras + 1
+    
+    print("\n*** Realiza experimentos A")
+    
+    print("\nRealiza classificação com features da camada CONV1")
+    classify(conv1, y, "resultados/a/", "conv1")
+    
+    print("\nRealiza classificação com features da camada CONV5")
+    classify(conv5, y, "resultados/a/", "conv5")
+    
+    print("\nRealiza classificação com features da camada FC2")
+    classify(fc2, y, "resultados/a/", "fc2")
+    
+    print("\n*** Realiza experimentos B")
+    
+    # Concatena featreus da conv1, conv5 e fc2
+    print("\nRealiza classificação early fusion")
+    early = []
+    for i in range(0, len(fc2)):
+        elem = []
+        elem.extend(conv1[i])
+        elem.extend(conv5[i])
+        elem.extend(fc2[i])
+        early.append(elem)
+    classify(early, y, "resultados/a/", "early")
+    
+    print("\nRealiza classificação voting")
+    
+    realiza_voting_svm_linear(conv1, conv5, fc2, y)
+    
+    print("\n*** Realiza experimentos C")
+    
+    print("\n   Realizando classificação Random Forest")
+    
+    # Realiza classificação Random Forest
+    realiza_classificacao_random_forest(fc2, y)
 
-# Diretório onde se encontram as amostras TODO deixar como parâmetro
-directory = "features";
-# Aqruivo com as classes
-fileClasses = "classes.txt";
+    print("\n   Realizando classificação 5-Subset Linear SVM Majority Vote")
 
-y = []
+    # Realiza classificação 5-subset + Linear SVM + Majority Voting
+    realiza_classificacao_5sub_lsvm_majorvote(fc2, y)
 
-# Faz leitura do arquivo de classes
-f = open(fileClasses)
-classes = f.readlines()
+    print("\n   Realizando classificação 5-Subset Bagging")
 
-# Realiza leitura das amostras, só utilizando aquelas que pertencem a uma classe válida
-print("Realizando leitura das amostras...")
-numeroLeituras = 0;
-amostras = os.listdir(directory)
-for item in amostras:
-    print("Lendo amostra "+str((numeroLeituras+1))+". Total de "+str(len(amostras)))
-
-    # Faz leitura da classe
-    linha = classes[int(item)-1]
-    classe = int(linha.split(' ')[1])    
-
-    if (classe <= 5):
-        # Realiza leitura das features apenas se for de uma classe válida
-        y.append(classe)
-
-        # Faz leitura das caraterísticas da camada conv1
-        arquivo = directory + "/" + item + "/conv1.txt";
-        with open(arquivo) as f:
-           content = f.readlines()
-           conv1.append([float(x.strip()) for x in content])
-
-        # Faz leitura das caraterísticas da camada conv5
-        arquivo = directory + "/" + item + "/conv5.txt";
-        with open(arquivo) as f:
-           content = f.readlines()
-           conv5.append([float(x.strip()) for x in content])
-
-        # Faz leitura das caraterísticas da camada fc2
-        arquivo = directory + "/" + item + "/conv7.txt";
-        with open(arquivo) as f:
-           content = f.readlines()
-           fc2.append([float(x.strip()) for x in content])
-
-    numeroLeituras = numeroLeituras + 1
-
-print("\n*** Realiza experimentos A")
-
-print("\nRealiza classificação com features da camada CONV1")
-classify(conv1, y, "resultados/a/", "conv1")
-
-print("\nRealiza classificação com features da camada CONV5")
-classify(conv5, y, "resultados/a/", "conv5")
-
-print("\nRealiza classificação com features da camada FC2")
-classify(fc2, y, "resultados/a/", "fc2")
-
-print("\n*** Realiza experimentos B")
-
-# Concatena featreus da conv1, conv5 e fc2
-print("\nRealiza classificação early fusion")
-early = []
-for i in range(0, len(fc2)):
-    elem = []
-    elem.extend(conv1[i])
-    elem.extend(conv5[i])
-    elem.extend(fc2[i])
-    early.append(elem)
-classify(early, y, "resultados/a/", "early")
-
-print("\nRealiza classificação voting")
-
-realiza_voting_svm_linear(conv1, conv5, fc2, y)
-
-print("\n*** Realiza experimentos C")
-
-print("\n   Realizando classificação Random Forest")
-
-# Realiza classificação Random Forest
-realiza_classificacao_random_forest(fc2, y)
+    # Realiza classificação 5-subset + Bagging
+    realiza_classificacao_5sub_bagging(fc2, y)
