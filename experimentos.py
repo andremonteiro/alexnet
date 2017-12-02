@@ -126,9 +126,7 @@ def classify(X, y, dir, nome):
     clf2 = SVC(kernel='rbf', gamma=clf.best_params_['gamma'], C=clf.best_params_['C'])
 
     scores = cross_val_score(clf2, X_test, y_test, cv=5)
-
-    # mean = statistics.mean(scores)
-    mean = clf.score(X_test, y_test)
+    mean = scores.mean()
     std = statistics.stdev(scores)
 
     print("\n   Resultado")
@@ -294,7 +292,7 @@ def realiza_classificacao_random_forest(fc2, y):
     # Faz cross-validation
     scores = cross_val_score(clf, X_test, y_test, cv=5)
 
-    mean = statistics.mean(scores)
+    mean = scores.mean()
     std = statistics.stdev(scores)
 
     print("\n   Resultado")
