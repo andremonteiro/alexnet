@@ -21,6 +21,9 @@ from os import walk
 from os import path
 from random import randint
 
+# Porcentagem das amostras que serão usadas para o teste.
+TEST_SIZE=0.25
+
 # Divide um array em N partes iguais. Usado para o cross validation
 def chunkIt(seq, num):
     avg = len(seq) / float(num)
@@ -99,13 +102,12 @@ def grava_matriz_confusao(conf_arr, file):
 
     plt.savefig(file, format='png')
 
-
 # Realiza a classificação com features e classes passadas como parâmetro
 # Testa um classificador SVM-RBF com parâmetros definidos via grid-search
 def classify(X, y, dir, nome):
     # Divide a base em dois conjuntos: treinamento + validação e teste
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.7, random_state=0)
+        X, y, test_size=TEST_SIZE, random_state=0)
 
     # Parâmetros para busca no grid-search
     tuned_parameters = [{'kernel': ['rbf'], 'gamma': [1e-3, 1e-4],
@@ -125,7 +127,8 @@ def classify(X, y, dir, nome):
 
     scores = cross_val_score(clf2, X_test, y_test, cv=5)
 
-    mean = statistics.mean(scores)
+    # mean = statistics.mean(scores)
+    mean = clf.score(X_test, y_test)
     std = statistics.stdev(scores)
 
     print("\n   Resultado")
@@ -173,7 +176,7 @@ def realiza_voting_svm_linear(conv1, conv5, fc2, y):
         ams.append(i)
 
     X_train_r, X_test_r, y_train_r, y_test_r = train_test_split(
-        ams, y, test_size=0.7, random_state=0)
+        ams, y, test_size=TEST_SIZE, random_state=0)
 
     # Garante que as três camadas usem as mesmas amostras como treinamento e teste
     X_train_conv1 = []
@@ -283,7 +286,7 @@ def realiza_voting_svm_linear(conv1, conv5, fc2, y):
 
 def realiza_classificacao_random_forest(fc2, y):
     X_train, X_test, y_train, y_test = train_test_split(
-        fc2, y, test_size=0.7, random_state=0)
+        fc2, y, test_size=TEST_SIZE, random_state=0)
 
     clf = RandomForestClassifier(max_depth=2, random_state=0)
     clf.fit(X_train, y_train)
@@ -342,7 +345,7 @@ def realiza_classificacao_5sub_lsvm_majorvote(fc2, y):
     for subsetIndex in range(0, len(slices)):
         subset = slices[subsetIndex]
         X_train, X_test, y_train, y_test = train_test_split(
-            subset, y, test_size=0.7, random_state=0)
+            subset, y, test_size=TEST_SIZE, random_state=0)
 
 
         svm = linear_svm(X_train, y_train)
@@ -381,7 +384,7 @@ def realiza_classificacao_5sub_lsvm_majorvote(fc2, y):
     file.write("%s\n" % std)
     file.close()
 
-    print("5-Subset Linear SVM MVote Precision: {}".format(mean))
+    print("\n   5-Subset Linear SVM MVote Precision: {}".format(mean))
 
 def realiza_classificacao_5sub_bagging(fc2, y):
     fc2NumFeatures = len(fc2[0])
@@ -389,64 +392,97 @@ def realiza_classificacao_5sub_bagging(fc2, y):
 
     # Contém 5 cópias da fc2, porém cada uma com fc2FeatureSlice feature-vectors
     slices = []
-
     for i in range(0, 5):
         vectors = []
         for layer in fc2:
             layerVectors = []
             numFeatures = fc2FeatureSlice
-            if i == 4:
-                numFeatures += fc2NumFeatures % 5
 
             for j in range(i * fc2FeatureSlice, i* fc2FeatureSlice + numFeatures):
                 layerVectors.append(layer[j])
 
-            # Deve ser igual a 820
-            # print(len(layerVectors))
             vectors.append(layerVectors)
 
-        # Deve ser igual a 104
-        # print(len(vectors))
         slices.append(vectors)
+    
+    # Coleta as subdivisoes de treino / teste de cada slice.
+    slicesData = []
+
+    # Contém os classificadores construídos (Bagging para cada Slice).
+    classifiers = []
+
+    # Contém os scores de cada classificador para cada dado:
+    # Ex: Slice 0: [1, 4, 3, 0, 3], Slice 1: [2, 1, 3, 2, 1], etc
+    dataScores = []
+    for subset in slices:
+        data = train_test_split(subset, y, test_size=TEST_SIZE, random_state=0)
+        slicesData.append(data)
+        dataScores.append([])
             
     # Roda uma vez pra cada subset.
     lSvmResults = []
     for subsetIndex in range(0, len(slices)):
         subset = slices[subsetIndex]
-        X_train, X_test, y_train, y_test = train_test_split(
-            subset, y, test_size=0.7, random_state=0)
-
+        X_train, X_test, y_train, y_test = slicesData[subsetIndex]
         classf = BaggingClassifier(KNeighborsClassifier(), 
                 max_samples=0.5, max_features=0.5)
 
+        # Armazena o classificador treinado.
         classf.fit(X_train, y_train)
-        result = classf.predict(X_test)
+        classifiers.append(classf)
 
-        # Votação para cada subset
-        precision = 0
-        for vote in range(0, len(y_test)):
-            if result[vote] == y_test[vote]:
-                precision += 1
+        # Faz a classificação de cada subset a partir desse classificador
+        for cSubsetIndex in range(0, len(slices)):
+            cSubsetData = slicesData[cSubsetIndex]
+            y_test = cSubsetData[3]
+            result = classf.predict(cSubsetData[1])
 
-        precision /= len(y)
-        lSvmResults.append(precision)
-        print("Bagging Precision of subset #{}: {}".format(subsetIndex, precision))
+            # Calcula o score do classificador (Maj. Vote)
+            score = 0
+            for vote in range(0, len(y_test)):
+                if result[vote] == y_test[vote]:
+                    score += 1
 
-        # Formata matriz de confusão
-        confMat = confusion_matrix(y_test, result)
+            # Armazena o score.
+            dataScores[cSubsetIndex].append(score)
 
-        # Grava resultados
-        grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_bagging_{}.png'.format(subsetIndex))
+    # Calcula o score de cada classificador (baseado nos acertos).
+    classifierScores = []
+    for classifierIndex in range(0, len(classifiers)):
+        score = 0
+        for classifiedData in dataScores:
+            score += classifiedData[classifierIndex]
 
-    mean = statistics.mean(lSvmResults)
-    std = statistics.stdev(lSvmResults)
+        classifierScores.append(score)
+
+    # Escolhe o classificador baseado na nota.
+    bestClassifier = 0
+    bestScore = classifierScores[0]
+    for classifierIndex in range(1, len(classifiers)):
+        if classifierScores[i] > bestScore:
+            bestClassifier = i
+            bestScore = classifierScores[i]
+
+    # Recupera as informações do melhor classificador.
+    X_train, X_test, y_train, y_test = slicesData[bestClassifier]
+    clf = classifiers[bestClassifier]
+
+    scores = cross_val_score(clf, X_test, y_test, cv=5)
+    mean = scores.mean()
+    std = statistics.stdev(scores)
+    bestResult = clf.predict(X_test)
+    print("\n   Melhor classificador foi #{}, com precisao/stdev: {} / {}".format(bestClassifier, mean, std))
+
+    # Formata matriz de confusão
+    confMat = confusion_matrix(y_test, bestResult)
+
+    # Grava resultados
+    grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_bagging.png'.format(subsetIndex))
 
     file = open("resultados/a/precision_5sub_bagging.txt", 'w')
     file.write("%s\n" % mean)
     file.write("%s\n" % std)
     file.close()
-
-    print("5-Subset Bagging Precision: {}".format(mean))
     
 
 # Início do programa    
@@ -531,17 +567,17 @@ if __name__ == '__main__':
     
     print("\n*** Realiza experimentos C")
     
-    print("\n   Realizando classificação Random Forest")
+    print("\nRealizando classificação Random Forest:")
     
     # Realiza classificação Random Forest
     realiza_classificacao_random_forest(fc2, y)
 
-    print("\n   Realizando classificação 5-Subset Linear SVM Majority Vote")
+    print("\nRealizando classificação 5-Subset Linear SVM Majority Vote:")
 
     # Realiza classificação 5-subset + Linear SVM + Majority Voting
     realiza_classificacao_5sub_lsvm_majorvote(fc2, y)
 
-    print("\n   Realizando classificação 5-Subset Bagging")
+    print("\nRealizando classificação 5-Subset Bagging:")
 
     # Realiza classificação 5-subset + Bagging
     realiza_classificacao_5sub_bagging(fc2, y)
