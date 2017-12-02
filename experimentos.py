@@ -319,72 +319,84 @@ def realiza_classificacao_5sub_lsvm_majorvote(fc2, y):
 
     # Contém 5 cópias da fc2, porém cada uma com fc2FeatureSlice feature-vectors
     slices = []
-
     for i in range(0, 5):
         vectors = []
         for layer in fc2:
             layerVectors = []
             numFeatures = fc2FeatureSlice
-            if i == 4:
-                numFeatures += fc2NumFeatures % 5
-
             for j in range(i * fc2FeatureSlice, i* fc2FeatureSlice + numFeatures):
                 layerVectors.append(layer[j])
 
-            # Deve ser igual a 820
-            # print(len(layerVectors))
             vectors.append(layerVectors)
 
-        # Deve ser igual a 104
-        # print(len(vectors))
         slices.append(vectors)
             
-    # Roda uma vez pra cada subset.
-    lSvmResults = []
-    lSvmResultsPrecisions = []
+    # Para cada slice criado, cria um Linear SVM e classifica todos os demais.
+    subsetData = []
+    subsetDataResults = []
     for subsetIndex in range(0, len(slices)):
         subset = slices[subsetIndex]
-        X_train, X_test, y_train, y_test = train_test_split(
-            subset, y, test_size=TEST_SIZE, random_state=0)
+        data = train_test_split(subset, y, test_size=TEST_SIZE, random_state=0)
+        subsetData.append(data)
+        subsetDataResults.append([])
 
+    classifiers = []
+    for subsetIndex in range(0, len(slices)):
+        subset = slices[subsetIndex]
+        classifierData = subsetData[subsetIndex]
+        classifiers.append(linear_svm(classifierData[0], classifierData[2]))
 
-        svm = linear_svm(X_train, y_train)
-        result = svm.predict(X_test)
+        for dataIndex in range(0, len(subsetData)):
+            X_train, X_test, y_train, y_test = subsetData[dataIndex]
+            result = classifiers[subsetIndex].predict(X_test)
 
-        # Votação para cada subset
-        precision = 0
-        for vote in range(0, len(y_test)):
-            if result[vote] == y_test[vote]:
-                precision += 1
+            # Calcula o score do classificador (Maj. Vote)
+            score = 0
+            for vote in range(0, len(y_test)):
+                if result[vote] == y_test[vote]:
+                    score += 1
 
-        precision /= len(y)
-        lSvmResultsPrecisions.append(precision)
-        lSvmResults.append(result)
-        # print("LSVM Precision of subset #{}: {}".format(subsetIndex, precision))
-    
-        # Devemos gerar uma matriz de confusão para cada resultado?
+            # Armazena o score.
+            subsetDataResults[dataIndex].append(score)
 
-        # Formata matriz de confusão
-        # confMat = confusion_matrix(y_test, result)
+    # Calcula o score de cada classificador (baseado nos acertos).
+    classifierScores = []
+    for classifierIndex in range(0, len(classifiers)):
+        score = 0
+        for classifiedData in subsetDataResults:
+            score += classifiedData[classifierIndex]
 
-        # Grava resultados
-        # grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_lsvm_mvote_{}.png'.format(subsetIndex))
+        classifierScores.append(score)
 
+    # Escolhe o classificador baseado na nota.
+    bestClassifier = 0
+    bestScore = classifierScores[0]
+    for classifierIndex in range(1, len(classifiers)):
+        if classifierScores[i] > bestScore:
+            bestClassifier = i
+            bestScore = classifierScores[i]
 
-    # Grava a matriz de confusãdo resultado mais preciso (majority voting)
-    highestResult = getHighestPrecisionResult(lSvmResults, lSvmResultsPrecisions)
-    confMat = confusion_matrix(y_test, highestResult)
+    # Recupera as informações do melhor classificador.
+    X_train, X_test, y_train, y_test = subsetData[bestClassifier]
+    clf = classifiers[bestClassifier]
+
+    scores = cross_val_score(clf, X_test, y_test, cv=5)
+    mean = scores.mean()
+    std = statistics.stdev(scores)
+    bestResult = clf.predict(X_test)
+    print("\n   Resultado (classificador #{})".format(bestClassifier))
+    print("   %0.3f (+/-%0.03f)" % (mean, std))    
+
+    # Formata matriz de confusão
+    confMat = confusion_matrix(y_test, bestResult)
+
+    # Grava resultados
     grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_lsvm_mvote.png')
-
-    mean = statistics.mean(lSvmResultsPrecisions)
-    std = statistics.stdev(lSvmResultsPrecisions)
 
     file = open("resultados/a/precision_5sub_lsvm_mvote.txt", 'w')
     file.write("%s\n" % mean)
     file.write("%s\n" % std)
     file.close()
-
-    print("\n   5-Subset Linear SVM MVote Precision: {}".format(mean))
 
 def realiza_classificacao_5sub_bagging(fc2, y):
     fc2NumFeatures = len(fc2[0])
@@ -471,7 +483,8 @@ def realiza_classificacao_5sub_bagging(fc2, y):
     mean = scores.mean()
     std = statistics.stdev(scores)
     bestResult = clf.predict(X_test)
-    print("\n   Melhor classificador foi #{}, com precisao/stdev: {} / {}".format(bestClassifier, mean, std))
+    print("\n   Resultado (classificador #{})".format(bestClassifier))
+    print("   %0.3f (+/-%0.03f)" % (mean, std))    
 
     # Formata matriz de confusão
     confMat = confusion_matrix(y_test, bestResult)
