@@ -38,21 +38,9 @@ def chunkIt(seq, num):
 
 def warn(*args, **kwargs):
     pass
+
 import warnings
 warnings.warn = warn
-
-# Dados dois arrays, de resultados e de precisoes, escolhe
-# o resultado com a maior precisão.
-def getHighestPrecisionResult(results, precisions):
-    if len(results) == 0 or len(precisions) == 0:
-        return []
-
-    highestPrecision = 0
-    for i in range(0, len(results)):
-        if precisions[i] > highestPrecision:
-            highestPrecision = i
-
-    return results[highestPrecision]
 
 # Retorna um classificador SVM linear treinado
 def linear_svm(X, y):
