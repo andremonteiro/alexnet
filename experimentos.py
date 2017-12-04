@@ -1,5 +1,8 @@
 from __future__ import print_function
 
+from numpy import array
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score
 from sklearn.ensemble import RandomForestClassifier
 import numpy as np
 import statistics
@@ -22,7 +25,7 @@ from os import path
 from random import randint
 
 # Porcentagem das amostras que serão usadas para o teste.
-TEST_SIZE=0.25
+TEST_SIZE=0.30
 
 # Divide um array em N partes iguais. Usado para o cross validation
 def chunkIt(seq, num):
@@ -138,12 +141,12 @@ def voting(r_conv1, r_conv5, r_fc2, test_y):
     # Faz voting
     resultados = []
     precisao = 0
-    for vote in range(0, len(test_y)):
+    for vote in range(0, len(test_y)):        
         # O que fazer em caso de empate? Considerando como certa a predição da FC2
         r = r_fc2[vote]
         v_conv1 = r_conv1[vote]
         v_conv5 = r_conv5[vote]
-        v_fc2 = r_fc2[vote]
+        v_fc2 = r_fc2[vote]        
 
         if v_conv1 == v_conv5:
             r = v_conv1
@@ -153,7 +156,13 @@ def voting(r_conv1, r_conv5, r_fc2, test_y):
 
         resultados.append(r)
 
-    return resultados, (precisao/len(test_y))
+    # Calcula AA ponderada pelo número de amostras em cada classe
+    w = np.ones(array(test_y).shape[0])
+    for idx, i in enumerate(np.bincount(test_y)):
+        w[test_y == idx] *= (i/float(array(test_y).shape[0]))
+    aa = accuracy_score(test_y, resultados, sample_weight=w)
+
+    return resultados, (precisao/len(test_y)), aa
 
 def realiza_voting_svm_linear(conv1, conv5, fc2, y):
     # Divide a base em dois conjuntos: treinamento + validação e teste
@@ -202,14 +211,17 @@ def realiza_voting_svm_linear(conv1, conv5, fc2, y):
     linear_conv2 = linear_svm(X_train_conv5, y_train_conv5)
     print("\n   Treinando SVM Linear para FC2")
     linear_fc2 = linear_svm(X_train_fc2, y_train_fc2)
-
+    
+    precisoes = []    
+    aas = []
+    print("\n   Realizando voting cross-validation")
     # Cria classificador de voting com cross validation
     # Divide base de testes em 5 partes para realizar cross-validation
-    folds = chunkIt(X_test_r, 5)
-    precisoes = []
+    skf = StratifiedKFold(n_splits=5)
+    k = 0;
     # Faz 5 iterações, para o cross validation 5-fold
-    print("\n   Realizando voting cross-validation")
-    for k in range(0, 5):
+    for train, test in skf.split(X_test_r, y_test_r):
+        k = k + 1
         print("\n      Iteração " + str(k))
         train_conv1_x = []
         train_conv5_x = []
@@ -219,22 +231,22 @@ def realiza_voting_svm_linear(conv1, conv5, fc2, y):
         test_fc2_x = []
         train_y = []
         test_y = []
-        for i in range(0, len(folds)):        
-            for j in range(0, len(folds[i])):
-                # Pega parte de teste        
-                if i == k:
-                    elem = folds[i][j]
-                    test_conv1_x.append(conv1[i])
-                    test_conv5_x.append(conv5[i])
-                    test_fc2_x.append(fc2[i])
-                    test_y.append(y[i])                
-                # Pega parte de treino
-                else:
-                    elem = folds[i][j]
-                    train_conv1_x.append(conv1[i])
-                    train_conv5_x.append(conv5[i])
-                    train_fc2_x.append(fc2[i])
-                    train_y.append(y[i])
+
+        # Pega parte de teste        
+        for i in range(0, len(test)):
+            elem = test[i]
+            test_conv1_x.append(conv1[elem])
+            test_conv5_x.append(conv5[elem])
+            test_fc2_x.append(fc2[elem])
+            test_y.append(y[elem])                
+
+        # Pega parte de treino
+        for i in range(0, len(train)):
+            elem = train[i]
+            train_conv1_x.append(conv1[elem])
+            train_conv5_x.append(conv5[elem])
+            train_fc2_x.append(fc2[elem])
+            train_y.append(y[elem])
 
         # Realiza treinamento dos SVMs
         linear_conv1.fit(train_conv1_x, train_y);
@@ -246,22 +258,26 @@ def realiza_voting_svm_linear(conv1, conv5, fc2, y):
         r_conv5 = linear_conv2.predict(test_conv5_x)
         r_fc2   = linear_fc2.predict(test_fc2_x)
 
-        resultados, precisao = voting(r_conv1, r_conv5, r_fc2, test_y)
+        resultados, precisao, aa = voting(r_conv1, r_conv5, r_fc2, test_y)        
 
         precisoes.append(precisao)
+        aas.append(aa)
 
     # Faz teste no modelo
     r_conv1 = linear_conv1.predict(X_test_conv1);
     r_conv5 = linear_conv2.predict(X_test_conv5);
     r_fc2 = linear_fc2.predict(X_test_fc2);
 
-    r, p = voting(r_conv1, r_conv5, r_fc2, y_test_conv1)
+    r, p, a = voting(r_conv1, r_conv5, r_fc2, y_test_conv1)
 
     mean = statistics.mean(precisoes)
     std = statistics.stdev(precisoes)
+    meanaa = statistics.mean(aas)
+    stdaa = statistics.stdev(aas)
 
     print("\n   Resultado")
-    print("   %0.3f (+/-%0.03f)" % (mean, std))    
+    print("   %0.3f (+/-%0.03f)" % (mean, std))
+    print("   %0.3f (+/-%0.03f)" % (meanaa, stdaa))
 
     # Agrega resultados
     grava_matriz_confusao(confusion_matrix(y_test_conv1, r), 'resultados/a/confusion_matrix_vote.png')    
@@ -274,7 +290,11 @@ def realiza_classificacao_random_forest(fc2, y):
     X_train, X_test, y_train, y_test = train_test_split(
         fc2, y, test_size=TEST_SIZE, random_state=0)
 
-    clf = RandomForestClassifier(max_depth=2, random_state=0)
+    # Parâmetros do Random Forest
+    tuned_parameters = {'n_estimators': [200, 700], 'max_features': ['auto', 'sqrt', 'log2']}
+
+    clf = RandomForestClassifier(n_jobs=-1,max_features= 'sqrt' ,n_estimators=50, oob_score = True) 
+    clf = GridSearchCV(estimator=clf, param_grid=tuned_parameters, cv= 5, scoring='precision_macro', n_jobs=-1)
     clf.fit(X_train, y_train)
 
     # Faz cross-validation
@@ -512,7 +532,7 @@ if __name__ == '__main__':
         linha = classes[int(item)-1]
         classe = int(linha.split(' ')[1])    
     
-        if (classe <= 5):
+        if (classe <= 10):
             # Realiza leitura das features apenas se for de uma classe válida
             y.append(classe)
     
@@ -539,30 +559,30 @@ if __name__ == '__main__':
     print("\n*** Realiza experimentos A")
     
     print("\nRealiza classificação com features da camada CONV1")
-    classify(conv1, y, "resultados/a/", "conv1")
+    #classify(conv1, y, "resultados/a/", "conv1")
     
     print("\nRealiza classificação com features da camada CONV5")
-    classify(conv5, y, "resultados/a/", "conv5")
+    #classify(conv5, y, "resultados/a/", "conv5")
     
     print("\nRealiza classificação com features da camada FC2")
-    classify(fc2, y, "resultados/a/", "fc2")
+    #classify(fc2, y, "resultados/a/", "fc2")
     
     print("\n*** Realiza experimentos B")
     
     # Concatena featreus da conv1, conv5 e fc2
     print("\nRealiza classificação early fusion")
-    early = []
-    for i in range(0, len(fc2)):
-        elem = []
-        elem.extend(conv1[i])
-        elem.extend(conv5[i])
-        elem.extend(fc2[i])
-        early.append(elem)
-    classify(early, y, "resultados/a/", "early")
+    #early = []
+    #for i in range(0, len(fc2)):
+    #    elem = []
+    #    elem.extend(conv1[i])
+    #    elem.extend(conv5[i])
+    #    elem.extend(fc2[i])
+    #    early.append(elem)
+    #classify(early, y, "resultados/a/", "early")
     
     print("\nRealiza classificação voting")
     
-    realiza_voting_svm_linear(conv1, conv5, fc2, y)
+    #realiza_voting_svm_linear(conv1, conv5, fc2, y)
     
     print("\n*** Realiza experimentos C")
     
@@ -574,9 +594,9 @@ if __name__ == '__main__':
     print("\nRealizando classificação 5-Subset Linear SVM Majority Vote:")
 
     # Realiza classificação 5-subset + Linear SVM + Majority Voting
-    realiza_classificacao_5sub_lsvm_majorvote(fc2, y)
+    #realiza_classificacao_5sub_lsvm_majorvote(fc2, y)
 
     print("\nRealizando classificação 5-Subset Bagging:")
 
     # Realiza classificação 5-subset + Bagging
-    realiza_classificacao_5sub_bagging(fc2, y)
+    #realiza_classificacao_5sub_bagging(fc2, y)
