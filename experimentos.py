@@ -1,5 +1,6 @@
 from __future__ import print_function
 
+import math
 from numpy import array
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score
@@ -93,6 +94,34 @@ def grava_matriz_confusao(conf_arr, file):
 
     plt.savefig(file, format='png')
 
+def calcula_aa(conf_arr):
+    width, height = conf_arr.shape
+    media = [];
+    total_elem = 0;
+    w = []
+
+    # conta quantos elementos tem na matrix para fazer ponderação
+    total_elem = 0
+    for x in range(width):
+        for y in range(height):
+            total_elem = total_elem + conf_arr[x][y]
+
+    # calcula valores na matriz
+    for x in range(width):
+        total = 0;
+        acertos = 0;
+        for y in range(height):
+            total = total + conf_arr[x][y]
+            if (x == y):
+                acertos = acertos + conf_arr[x][y]
+        media.append(acertos/total)
+        w.append((total/total_elem))
+
+    # calcula aa ponderada pelo número de amostras em cada classe
+    average = np.average(media, weights=w)
+    std = math.sqrt(np.average((media-average)**2, weights=w))
+    return average, std
+
 # Realiza a classificação com features e classes passadas como parâmetro
 # Testa um classificador SVM-RBF com parâmetros definidos via grid-search
 def classify(X, y, dir, nome):
@@ -127,13 +156,20 @@ def classify(X, y, dir, nome):
     y_pred = clf.predict(X_test)
 
     # Formata matriz de confusão
-    conf_arr = confusion_matrix(y_true, y_pred)
+    conf_arr = confusion_matrix(y_true, y_pred)    
+
+    # Calcula Average Accuracy
+    mean2, std2 = calcula_aa(conf_arr)
+
+    print("   %0.3f (+/-%0.03f)" % (mean2, std2))
 
     # Grava resultados
     grava_matriz_confusao(conf_arr, dir+'confusion_matrix_'+nome+'.png')
     file = open(dir+"precision_"+nome+".txt", 'w')
     file.write("%s\n" % mean)
     file.write("%s\n" % std)
+    file.write("%s\n" % mean2)
+    file.write("%s\n" % std2)
     file.close();
 
 # Faz votação dos classificadores
@@ -156,13 +192,7 @@ def voting(r_conv1, r_conv5, r_fc2, test_y):
 
         resultados.append(r)
 
-    # Calcula AA ponderada pelo número de amostras em cada classe
-    w = np.ones(array(test_y).shape[0])
-    for idx, i in enumerate(np.bincount(test_y)):
-        w[test_y == idx] *= (i/float(array(test_y).shape[0]))
-    aa = accuracy_score(test_y, resultados, sample_weight=w)
-
-    return resultados, (precisao/len(test_y)), aa
+    return resultados, (precisao/len(test_y))
 
 def realiza_voting_svm_linear(conv1, conv5, fc2, y):
     # Divide a base em dois conjuntos: treinamento + validação e teste
@@ -258,32 +288,34 @@ def realiza_voting_svm_linear(conv1, conv5, fc2, y):
         r_conv5 = linear_conv2.predict(test_conv5_x)
         r_fc2   = linear_fc2.predict(test_fc2_x)
 
-        resultados, precisao, aa = voting(r_conv1, r_conv5, r_fc2, test_y)        
+        resultados, precisao = voting(r_conv1, r_conv5, r_fc2, test_y)
 
         precisoes.append(precisao)
-        aas.append(aa)
 
     # Faz teste no modelo
     r_conv1 = linear_conv1.predict(X_test_conv1);
     r_conv5 = linear_conv2.predict(X_test_conv5);
     r_fc2 = linear_fc2.predict(X_test_fc2);
 
-    r, p, a = voting(r_conv1, r_conv5, r_fc2, y_test_conv1)
+    r, p = voting(r_conv1, r_conv5, r_fc2, y_test_conv1)
 
     mean = statistics.mean(precisoes)
     std = statistics.stdev(precisoes)
-    meanaa = statistics.mean(aas)
-    stdaa = statistics.stdev(aas)
-
+    
     print("\n   Resultado")
     print("   %0.3f (+/-%0.03f)" % (mean, std))
-    print("   %0.3f (+/-%0.03f)" % (meanaa, stdaa))
+
+    # Calcula Average Accuracy
+    mean2, std2 = calcula_aa(confusion_matrix(y_test_conv1, r))
+    print("   %0.3f (+/-%0.03f)" % (mean2, std2))
 
     # Agrega resultados
     grava_matriz_confusao(confusion_matrix(y_test_conv1, r), 'resultados/a/confusion_matrix_vote.png')    
     file = open("resultados/a/precision_vote.txt", 'w')
     file.write("%s\n" % mean)
     file.write("%s\n" % std)
+    file.write("%s\n" % mean2)
+    file.write("%s\n" % std2)
     file.close();
 
 def realiza_classificacao_random_forest(fc2, y):
@@ -312,11 +344,16 @@ def realiza_classificacao_random_forest(fc2, y):
     # Formata matriz de confusão
     conf_arr = confusion_matrix(y_true, y_pred)
 
+    mean2, std2 = calcula_aa(conf_arr)
+    print("   %0.3f (+/-%0.03f)" % (mean2, std2))
+
     # Grava resultados
     grava_matriz_confusao(conf_arr, 'resultados/a/confusion_matrix_random.png')
     file = open("resultados/a/precision_random.txt", 'w')
     file.write("%s\n" % mean)
     file.write("%s\n" % std)
+    file.write("%s\n" % mean2)
+    file.write("%s\n" % std2)
     file.close();
 
 def realiza_classificacao_5sub_lsvm_majorvote(fc2, y):
@@ -396,12 +433,18 @@ def realiza_classificacao_5sub_lsvm_majorvote(fc2, y):
     # Formata matriz de confusão
     confMat = confusion_matrix(y_test, bestResult)
 
+    # Formata matriz de confusão
+    mean2, std2 = calcula_aa(confMat)
+    print("   %0.3f (+/-%0.03f)" % (mean2, std2))
+
     # Grava resultados
     grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_lsvm_mvote.png')
 
     file = open("resultados/a/precision_5sub_lsvm_mvote.txt", 'w')
     file.write("%s\n" % mean)
     file.write("%s\n" % std)
+    file.write("%s\n" % mean2)
+    file.write("%s\n" % std2)
     file.close()
 
 def realiza_classificacao_5sub_bagging(fc2, y):
@@ -495,12 +538,18 @@ def realiza_classificacao_5sub_bagging(fc2, y):
     # Formata matriz de confusão
     confMat = confusion_matrix(y_test, bestResult)
 
+    # Calcula AA
+    mean2, std2 = calcula_aa(confMat)
+    print("   %0.3f (+/-%0.03f)" % (mean2, std2))
+
     # Grava resultados
     grava_matriz_confusao(confMat, 'resultados/a/confusion_matrix_5sub_bagging.png'.format(subsetIndex))
 
     file = open("resultados/a/precision_5sub_bagging.txt", 'w')
     file.write("%s\n" % mean)
     file.write("%s\n" % std)
+    file.write("%s\n" % mean2)
+    file.write("%s\n" % std2)
     file.close()
     
 
@@ -569,7 +618,7 @@ if __name__ == '__main__':
     
     print("\n*** Realiza experimentos B")
     
-    # Concatena featreus da conv1, conv5 e fc2
+    # Concatena features da conv1, conv5 e fc2
     print("\nRealiza classificação early fusion")
     #early = []
     #for i in range(0, len(fc2)):
@@ -594,9 +643,9 @@ if __name__ == '__main__':
     print("\nRealizando classificação 5-Subset Linear SVM Majority Vote:")
 
     # Realiza classificação 5-subset + Linear SVM + Majority Voting
-    #realiza_classificacao_5sub_lsvm_majorvote(fc2, y)
+    realiza_classificacao_5sub_lsvm_majorvote(fc2, y)
 
     print("\nRealizando classificação 5-Subset Bagging:")
 
     # Realiza classificação 5-subset + Bagging
-    #realiza_classificacao_5sub_bagging(fc2, y)
+    realiza_classificacao_5sub_bagging(fc2, y)
